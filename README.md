@@ -26,7 +26,7 @@ This project implements a human-in-the-loop AI assistant for a local salon calle
 1. Clone the repository:
 
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/u0m5e0s9h/call-gpt.git
    cd call-gpt
    ```
 
