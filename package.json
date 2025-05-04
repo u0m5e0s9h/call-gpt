@@ -19,11 +19,15 @@
     "dotenv": "^16.3.1",
     "express": "^4.19.2",
     "express-ws": "^5.0.2",
+    "firebase-admin": "^13.3.0",
+    "livekit-client": "^2.11.4",
+    "livekit-server-sdk": "^2.12.0",
     "node-fetch": "^2.7.0",
     "openai": "^4.20.1",
     "twilio": "^4.19.3",
     "uuid": "^9.0.1",
-    "wavefile": "^11.0.0"
+    "wavefile": "^11.0.0",
+    "ws": "^8.18.2"
   },
   "devDependencies": {
     "@flydotio/dockerfile": "^0.4.11",

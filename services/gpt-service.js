@@ -1,6 +1,8 @@
+
+
 require('colors');
 const EventEmitter = require('events');
-const OpenAI = require('openai');
+// const OpenAI = require('openai');
 const tools = require('../functions/function-manifest');
 
 // Import all functions included in function manifest
@@ -14,27 +16,55 @@ tools.forEach((tool) => {
 class GptService extends EventEmitter {
   constructor() {
     super();
-    this.openai = new OpenAI();
+    // this.openai = new OpenAI();
     this.userContext = [
-      { 'role': 'system', 'content': 'You are an outbound sales representative selling Apple Airpods. You have a youthful and cheery personality. Keep your responses as brief as possible but make every attempt to keep the caller on the phone without being rude. Don\'t ask more than 1 question at a time. Don\'t make assumptions about what values to plug into functions. Ask for clarification if a user request is ambiguous. Speak out all prices to include the currency. Please help them decide between the airpods, airpods pro and airpods max by asking questions like \'Do you prefer headphones that go in your ear or over the ear?\'. If they are trying to choose between the airpods and airpods pro try asking them if they need noise canceling. Once you know which model they would like ask them how many they would like to purchase and try to get them to place an order. You must add a \'•\' symbol every 5 to 10 words at natural pauses where your response can be split for text to speech.' },
-      { 'role': 'assistant', 'content': 'Hello! I understand you\'re looking for a pair of AirPods, is that correct?' },
-    ],
+      {
+        role: 'system',
+        content:
+          'You are a helpful AI assistant for a local salon called "Glamour Salon". The salon offers haircuts, coloring, and styling services. Business hours are Monday to Friday from 9am to 7pm, and Saturday from 10am to 5pm. Haircuts cost $30, coloring $60. The salon is located at 123 Main Street. You have a friendly and professional tone. Keep your responses brief and clear. If you don\'t know the answer, say so and ask to escalate to a human supervisor. Use natural language and be polite.',
+      },
+      {
+        role: 'assistant',
+        content: 'Hello! Welcome to Glamour Salon. How can I assist you today?',
+      },
+    ];
     this.partialResponseIndex = 0;
+
+    // Add a simple knowledge base as a Map (key: question, value: answer)
+    this.knowledgeBase = new Map();
+
+    // Index to cycle through questions
+    this.questionIndex = 0;
+
+    // Predefined salon questions
+    this.salonQuestions = [
+      "What are your business hours?",
+      "How much does a haircut cost?",
+      "Do you offer hair coloring services?",
+      "Where is the salon located?",
+      "Can I book an appointment online?",
+      "What safety measures are in place?",
+      "Do you have any special offers?",
+      "What products do you use?",
+      "Are walk-ins welcome?",
+      "What is your cancellation policy?"
+    ];
   }
 
-  // Add the callSid to the chat context in case
-  // ChatGPT decides to transfer the call.
-  setCallSid (callSid) {
-    this.userContext.push({ 'role': 'system', 'content': `callSid: ${callSid}` });
+  // Add the callSid to the chat context
+  setCallSid(callSid) {
+    this.userContext.push({
+      role: 'system',
+      content: `callSid: ${callSid}`,
+    });
   }
 
-  validateFunctionArgs (args) {
+  validateFunctionArgs(args) {
     try {
       return JSON.parse(args);
     } catch (error) {
       console.log('Warning: Double function arguments returned by OpenAI:', args);
-      // Seeing an error where sometimes we have two sets of args
-      if (args.indexOf('{') != args.lastIndexOf('{')) {
+      if (args.indexOf('{') !== args.lastIndexOf('{')) {
         return JSON.parse(args.substring(args.indexOf(''), args.indexOf('}') + 1));
       }
     }
@@ -42,95 +72,47 @@ class GptService extends EventEmitter {
 
   updateUserContext(name, role, text) {
     if (name !== 'user') {
-      this.userContext.push({ 'role': role, 'name': name, 'content': text });
+      this.userContext.push({ role: role, name: name, content: text });
     } else {
-      this.userContext.push({ 'role': role, 'content': text });
+      this.userContext.push({ role: role, content: text });
     }
+  }
+
+  // Method to update the knowledge base
+  updateKnowledgeBase(question, answer) {
+    this.knowledgeBase.set(question, answer);
+    console.log(`Knowledge base updated with: ${question} -> ${answer}`);
   }
 
   async completion(text, interactionCount, role = 'user', name = 'user') {
     this.updateUserContext(name, role, text);
 
-    // Step 1: Send user transcription to Chat GPT
-    const stream = await this.openai.chat.completions.create({
-      model: 'gpt-4-1106-preview',
-      messages: this.userContext,
-      tools: tools,
-      stream: true,
-    });
-
     let completeResponse = '';
-    let partialResponse = '';
-    let functionName = '';
-    let functionArgs = '';
-    let finishReason = '';
+    const question = this.salonQuestions[this.questionIndex % this.salonQuestions.length];
+    this.questionIndex = (this.questionIndex + 1) % this.salonQuestions.length;
 
-    function collectToolInformation(deltas) {
-      let name = deltas.tool_calls[0]?.function?.name || '';
-      if (name != '') {
-        functionName = name;
-      }
-      let args = deltas.tool_calls[0]?.function?.arguments || '';
-      if (args != '') {
-        // args are streamed as JSON string so we need to concatenate all chunks
-        functionArgs += args;
-      }
-    }
-
-    for await (const chunk of stream) {
-      let content = chunk.choices[0]?.delta?.content || '';
-      let deltas = chunk.choices[0].delta;
-      finishReason = chunk.choices[0].finish_reason;
-
-      // Step 2: check if GPT wanted to call a function
-      if (deltas.tool_calls) {
-        // Step 3: Collect the tokens containing function data
-        collectToolInformation(deltas);
-      }
-
-      // need to call function on behalf of Chat GPT with the arguments it parsed from the conversation
-      if (finishReason === 'tool_calls') {
-        // parse JSON string of args into JSON object
-
-        const functionToCall = availableFunctions[functionName];
-        const validatedArgs = this.validateFunctionArgs(functionArgs);
-        
-        // Say a pre-configured message from the function manifest
-        // before running the function.
-        const toolData = tools.find(tool => tool.function.name === functionName);
-        const say = toolData.function.say;
-
-        this.emit('gptreply', {
-          partialResponseIndex: null,
-          partialResponse: say
-        }, interactionCount);
-
-        let functionResponse = await functionToCall(validatedArgs);
-
-        // Step 4: send the info on the function call and function response to GPT
-        this.updateUserContext(functionName, 'function', functionResponse);
-        
-        // call the completion function again but pass in the function response to have OpenAI generate a new assistant response
-        await this.completion(functionResponse, interactionCount, 'function', functionName);
+    // Check if the question exists in the knowledge base
+    if (this.knowledgeBase.has(text)) {
+      // Return the stored answer if the question is found in the knowledge base
+      completeResponse = this.knowledgeBase.get(text);
+    } else {
+      // If the answer is not found, simulate a help request
+      if (text.toLowerCase().includes('help') || text.toLowerCase().includes('simulated transcription text')) {
+        this.emit('requestHelp', question);
+        completeResponse = `Mock response to: ${question} •`;
       } else {
-        // We use completeResponse for userContext
-        completeResponse += content;
-        // We use partialResponse to provide a chunk for TTS
-        partialResponse += content;
-        // Emit last partial response and add complete response to userContext
-        if (content.trim().slice(-1) === '•' || finishReason === 'stop') {
-          const gptReply = { 
-            partialResponseIndex: this.partialResponseIndex,
-            partialResponse
-          };
-
-          this.emit('gptreply', gptReply, interactionCount);
-          this.partialResponseIndex++;
-          partialResponse = '';
-        }
+        completeResponse = `Mock response to: ${text} •`;
       }
     }
-    this.userContext.push({'role': 'assistant', 'content': completeResponse});
+
+    this.emit(
+      'gptreply',
+      { partialResponseIndex: this.partialResponseIndex, partialResponse: completeResponse },
+      interactionCount
+    );
+    this.partialResponseIndex++;
+
+    this.userContext.push({ role: 'assistant', content: completeResponse });
     console.log(`GPT -> user context length: ${this.userContext.length}`.green);
   }
 }
